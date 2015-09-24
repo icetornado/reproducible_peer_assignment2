@@ -1,0 +1,141 @@
+---
+title: "Reproducible Research - Peer Assessment 2"
+author: "Trieu Tran"
+date: "September 23, 2015"
+output: 
+  html_document: 
+    keep_md: yes
+---
+## Synopsis
+
+## Loading and processing raw data
+```{R echo=TRUE,results='hide',warning=FALSE,message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(reshape2)
+
+## checking existence of a folder named "figure", if not then creating one to store plot figures
+figureDir <- 'figure'
+if (!file.exists(figureDir)){
+    dir.create(figureDir)
+} 
+```
+```{r echo=TRUE, cache = TRUE}
+## download zip file
+if (!file.exists(file.path("data", "repdata-data-StormData.csv.bz2"))) {
+        download.file("http://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", destfile = "repdata-data-StormData.csv.bz2")
+}
+# reading raw data csv file
+rawData <- read.csv(file.path("data", "repdata-data-StormData.csv.bz2"), na.strings = "", stringsAsFactors = FALSE)
+```
+I copied text of "Storm Data Event Table" from NOAA's [https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf](Storm Data Documentation) and created a csv file, [https://github.com/icetornado/reproducible_peer_assignment2/blob/master/data/event_types.csv](event_types.csv) as reference for event types.
+
+```{r echo=TRUE}
+# reading event type reference dataframe
+eventTypes <- read.csv(file.path("data", "event_types.csv"), header = FALSE)
+names(eventTypes) <- c("name", "designator")
+eventTypes$name <- toupper(eventTypes$name)
+
+## cleaning up EVTYPE process 
+data <- rawData
+### first trimming leading or trailing blank spaces
+data$EVTYPE <- trimws(data$EVTYPE)
+
+### converting all uppercased 
+data$EVTYPE <- toupper(data$EVTYPE)
+
+### eleminating event types with format "SUMMARY OF xxx", marking them as "ERROR"
+data$EVTYPE <- gsub("^SUMMARY(\\s|\\w|.|-|_)*", "ERROR", data$EVTYPE)
+## convert data from data frame to data table format for better execution 
+data <- data.table(data)
+
+## mapping exact phrases of event type in event types reference dataframe
+## by reading each event type name from the reference data frame "eventTypes"
+## then build a regular expression to match, then scanning through the whole "data"
+for(i in 1: length(eventTypes$name)) {
+        eventName <- eventTypes[i, "name"]
+        pattern <- paste(eventName, "(\\s|\\w|.|-|_)*", sep = "")
+        data <- transform(data, EVTYPE = gsub(pattern, eventName, EVTYPE))
+}
+
+## taking a quick look of how many event types remaining
+unique(data$EVTYPE)
+
+## apporox. 536 event types, therefore, we need to do more cleaning
+## I took the output of from the above unique command and built an excel spreadsheet
+## to map each event type in the "data" to a valid event type from the reference table
+
+## read mapping table
+eventMap <- read.csv(file.path("data", "event_mapping.csv"), header = FALSE)
+names(eventMap) <- c("raw", "clean")
+
+## replace data$EVTYPE  values with correct ones from eventMap
+doMapping <- function(x, map) {
+        found <- which(map$raw == x["EVTYPE"])
+        if(found > 0) {
+                map[found, "clean"]
+        }
+        else {
+                "ERROR"
+        }
+}
+data$EVTYPE <- apply(data, 1, FUN="doMapping", map=eventMap)
+
+##TO DOs:
+## The event name of Landslide was renamed to Debris Flow - done
+## heat vs. excesive heat
+## snow vs. winter storm
+
+```
+```{r echo=TRUE}
+## get health damage data
+healthDamageData <- select(data, EVTYPE, FATALITIES, INJURIES)
+
+healthDamageData  <- healthDamageData %>%
+        group_by(EVTYPE) %>%
+        summarise(fatalities = sum(FATALITIES), injuries = sum(INJURIES)) %>%
+        filter(fatalities > 0 | injuries > 0)
+
+healthDamageData <- melt(healthDamageData)
+names(healthDamageData) <- c("eventType", "damage", "count")
+
+p <- ggplot(data = healthDamageData, aes(x = factor(damage), y = count, color = factor(eventType)))
+p <- p + geom_point() + aes(group = healthDamageData$eventType) + geom_line() 
+p <- p +   theme(legend.position="none")
+p <- p + labs(x = "Damage", y = "Total count", title = "Plot 1") 
+
+ecoDT <- data.table(select(data, EVTYPE, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP))
+ecoDT <- mutate(ecoDT, propDmgMulti = 0, cropDmgMulti = 0, propActualDmg = 0, cropActualDmg = 0)
+ecoDT[is.na(PROPDMGEXP), propDmgMulti := NA]
+ecoDT[(!is.na(PROPDMGEXP) & is.numeric(as.numeric(PROPDMGEXP))), propDmgMulti := PROPDMGEXP]
+ecoDT[(!is.na(PROPDMGEXP) & toupper(PROPDMGEXP) == "B" ), propDmgMulti := 9]
+ecoDT[(!is.na(PROPDMGEXP) & toupper(PROPDMGEXP) == "M" ), propDmgMulti := 6]
+ecoDT[(!is.na(PROPDMGEXP) & toupper(PROPDMGEXP) == "K" ), propDmgMulti := 3]
+ecoDT[(!is.na(PROPDMGEXP) & toupper(PROPDMGEXP) == "H" ), propDmgMulti := 2]
+
+ecoDT[is.na(CROPDMGEXP), cropDmgMulti := NA]
+ecoDT[(!is.na(CROPDMGEXP) & is.numeric(as.numeric(CROPDMGEXP))), cropDmgMulti := CROPDMGEXP]
+ecoDT[(!is.na(CROPDMGEXP) & toupper(CROPDMGEXP) == "B" ), cropDmgMulti := 9]
+ecoDT[(!is.na(CROPDMGEXP) & toupper(CROPDMGEXP) == "M" ), cropDmgMulti := 6]
+ecoDT[(!is.na(CROPDMGEXP) & toupper(CROPDMGEXP) == "K" ), cropDmgMulti := 3]
+ecoDT[(!is.na(CROPDMGEXP) & toupper(CROPDMGEXP) == "H" ), cropDmgMulti := 2]
+
+ecoDT[(!is.na(propDmgMulti) & !is.na(PROPDMG)), propActualDmg := 10^propDmgMulti * PROPDMG]
+ecoDT[(!is.na(cropDmgMulti) & !is.na(CROPDMG)), cropActualDmg := 10^cropDmgMulti * CROPDMG]
+
+ecoPlotDT <- ecoDT %>%
+        group_by(EVTYPE) %>%
+        summarise(ttlPropDmg = sum(propActualDmg), ttlCropDmg = sum(cropActualDmg)) %>%
+        mutate(ttlDmg = ttlPropDmg + ttlCropDmg) %>%
+        filter(ttlDmg > 0)
+
+ecoPlotDT[which(ecoPlotDT$ttlDmg == max(ecoPlotDT$ttlDmg)), ]
+
+p <- ggplot(data = ecoPlotDT, aes(x = as.factor(EVTYPE), y = ttlDmg, fill = as.factor(EVTYPE)))
+p <- p + geom_bar(stat="identity") + theme(axis.text.x = element_text(size  = 10, angle = 45, hjust = 1,vjust = 1))
+p <- p + theme(legend.position="none")
+p <- p + labs(x = "Damage", y = "Total count", title = "Plot 2")  
+```
+## Results
+
