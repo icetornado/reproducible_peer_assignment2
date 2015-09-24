@@ -1,3 +1,6 @@
 .Rhistory
-data/*
+data/repdata-data-StormData.csv
 figure/unnamed-*
+events.csv
+
+events_mapping.xlsx
